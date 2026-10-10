@@ -50,6 +50,7 @@ build-vision-cuda12.bat
 /engine/
 /engine-cuda12/
 /engine-llama/
+/.strata-gui.json
 /build-release*/
 /dist/
 *.done

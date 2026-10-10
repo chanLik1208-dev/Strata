@@ -19,6 +19,7 @@ Standard library only, besides serve/telemetry.py (psutil / NVML when present).
 from __future__ import annotations
 
 import argparse
+import signal
 import http.client
 import json
 import os
@@ -91,22 +92,25 @@ def llama_args(exe: Path, model: Path, port: int, name: str, ctx: int | None, mm
     if mmproj:
         args += ["--mmproj", mmproj]
     if low_vram and not any(a in extra for a in ("-ctk", "--cache-type-k")):
-        args += ["-ctk", "q8_0", "-ctv", "q8_0"]
+        args += ["-ctk", "q8_0"]
+    if low_vram and not any(a in extra for a in ("-ctv", "--cache-type-v")):
+        args += ["-ctv", "q8_0"]
     return args + extra
 
 
 class Upstream:
     """llama-server: the process, its log, and whether it answers yet."""
 
-    def __init__(self, args: list[str], port: int, log: Path):
-        self.port, self.log_path = port, log
+    def __init__(self, args: list[str], port: int, log: Path, env: dict | None = None, on_exit=None):
+        self.port, self.log_path, self.on_exit = port, log, on_exit
+        self.stopping = False
         self.ready = False
         self.props: dict = {}
         self.error = ""
         self.log = open(log, "a", encoding="utf-8", errors="replace")
         say("starting:", subprocess.list2cmdline(args))
         self.proc = subprocess.Popen(args, cwd=str(Path(args[0]).parent), stdout=subprocess.PIPE,
-                                     stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
+                                     stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, env=env)
         try:                                     # Windows: llama-server ends with this proxy, however it ends
             sys.path.insert(0, str(ROOT))
             from serve.winjob import contain
@@ -127,7 +131,10 @@ class Upstream:
         code = self.proc.wait()
         self.ready = False
         self.error = f"llama-server stopped (exit code {code}); its log: {self.log_path.name}"
-        say(self.error)
+        if not self.stopping:
+            say(self.error)
+            if self.on_exit:                     # nothing left to serve: the proxy ends too (the launcher sees it)
+                self.on_exit()
 
     def _wait(self):
         while self.proc.poll() is None:
@@ -152,6 +159,7 @@ class Upstream:
             c.close()
 
     def stop(self):
+        self.stopping = True
         if self.proc.poll() is None:
             self.proc.terminate()
             try:
@@ -211,6 +219,8 @@ class State:
                    "prefill_tok_s": round(t["prompt_per_second"], 1) if t.get("prompt_per_second") else None,
                    "state": "done" if finish != "error" else "error"}
             self.history.append(rec)
+            if not any(x["state"] == "generating" for x in self.live.values()):
+                self.tok_s = 0.0                 # the Monitor's speed line drops when nothing is written
             tot = self.totals
             tot["requests"] += 1
             tot["prompt_tokens"] += rec["prompt_tokens"] or 0
@@ -235,6 +245,13 @@ class State:
                 "elapsed_s": round(time.time() - cur["started"], 1) if cur else None,
                 "tok_s": round(tok_s, 1) if state == "generating" else None,
                 "tok_s_mean": round(tok_s, 1) if state == "generating" else None}
+
+
+class Server(ThreadingHTTPServer):
+    # as serve/server.py: on Windows SO_REUSEADDR lets a second server bind a port already in use, so a second start
+    # would not fail - and would load the model a second time beside the first
+    allow_reuse_address = os.name != "nt"
+    daemon_threads = True
 
 
 def make_handler(up: Upstream, st: State, name: str, api_key: str | None, telemetry, facts: dict):
@@ -302,6 +319,7 @@ def make_handler(up: Upstream, st: State, name: str, api_key: str | None, teleme
 
         # ---- the web app's own paths
         def do_GET(self):
+            self._body = self._read_body()
             path = self.path.split("?")[0].rstrip("/")
             if path == "":
                 return self._file(WEB / "index.html", "text/html; charset=utf-8")
@@ -328,13 +346,19 @@ def make_handler(up: Upstream, st: State, name: str, api_key: str | None, teleme
                 return self._json(404, {"error": {"message": "generic mode: settings are the command line"}})
             self._proxy("GET")
 
+        def _read_body(self) -> bytes:
+            n = int(self.headers.get("Content-Length") or 0)
+            return self.rfile.read(n) if n > 0 else b""
+
         def do_POST(self):
+            self._body = self._read_body()
             path = self.path.split("?")[0].rstrip("/")
             if path in ("/settings", "/config"):
                 return self._json(400, {"error": {"message": "not available in generic mode (llama.cpp)"}})
             self._proxy("POST")
 
         def do_DELETE(self):
+            self._body = self._read_body()
             self._proxy("DELETE")
 
         def do_OPTIONS(self):
@@ -352,8 +376,8 @@ def make_handler(up: Upstream, st: State, name: str, api_key: str | None, teleme
             if not up.ready:
                 return self._json(503, {"error": {"message": up.error or "the model is still loading",
                                                   "type": "unavailable"}})
-            n = int(self.headers.get("Content-Length") or 0)
-            body = self.rfile.read(n) if n else b""
+            body = getattr(self, "_body", b"")
+            self._body = b""
             path = self.path.split("?")[0].rstrip("/")
             tracked = method == "POST" and (path.startswith("/v1/") or path in PROGRESS_PATHS)
             stream = asked_progress = False
@@ -372,6 +396,7 @@ def make_handler(up: Upstream, st: State, name: str, api_key: str | None, teleme
                     body = json.dumps(req).encode()
             rid = st.begin(path) if tracked else None
             finish, timings = "error", None
+            self._sent = False
             conn = http.client.HTTPConnection("127.0.0.1", up.port, timeout=3600)
             try:
                 headers = {k: v for k, v in self.headers.items()
@@ -384,6 +409,7 @@ def make_handler(up: Upstream, st: State, name: str, api_key: str | None, teleme
                     finish, timings = self._relay_sse(r, rid, asked_progress)
                 else:
                     data = r.read()
+                    self._sent = True
                     self.send_response(r.status)
                     for k, v in r.getheaders():
                         if k.lower() not in ("transfer-encoding", "connection", "content-length"):
@@ -399,18 +425,20 @@ def make_handler(up: Upstream, st: State, name: str, api_key: str | None, teleme
                         except ValueError:
                             pass
             except (ConnectionError, OSError) as e:
-                if rid:
-                    finish = "cancelled" if isinstance(e, (BrokenPipeError, ConnectionResetError)) else "error"
-                try:
-                    self._json(502, {"error": {"message": f"llama-server: {e}"}})
-                except OSError:
-                    pass
+                finish = "error"                         # llama-server failed: before or while answering
+                if not self._sent:
+                    try:
+                        self._json(502, {"error": {"message": f"llama-server: {e}"}})
+                    except OSError:
+                        finish = "cancelled"
+                self.close_connection = True
             finally:
                 conn.close()
                 if rid:
                     st.end(rid, timings, finish)
 
         def _relay_sse(self, r, rid, asked_progress) -> tuple[str, dict | None]:
+            self._sent = True
             self.send_response(r.status)
             self.send_header("Content-Type", r.getheader("Content-Type"))
             self.send_header("Cache-Control", "no-cache")
@@ -423,7 +451,11 @@ def make_handler(up: Upstream, st: State, name: str, api_key: str | None, teleme
                 self.wfile.flush()
 
             while True:
-                line = r.readline()
+                try:
+                    line = r.readline()
+                except OSError:                           # llama-server went away mid-answer
+                    finish = "error"
+                    break
                 if not line:
                     break
                 drop = False
@@ -452,7 +484,11 @@ def make_handler(up: Upstream, st: State, name: str, api_key: str | None, teleme
                         if j.get("type") in ("content_block_delta", "response.output_text.delta"):
                             st.token(rid)                 # Anthropic / Responses streams: count their deltas
                 if drop:
-                    r.readline()                          # the blank line that ends the dropped event
+                    try:
+                        r.readline()                      # the blank line that ends the dropped event
+                    except OSError:
+                        finish = "error"
+                        break
                     continue
                 try:
                     send(line)
@@ -479,14 +515,17 @@ def main() -> int:
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--api-key", help="require this key (always set one with --host 0.0.0.0)")
     ap.add_argument("--llama-server", default=str(default_llama_server()), help="the llama-server executable")
-    ap.add_argument("--gpu", type=int, default=0, help="the card the Monitor shows (nvidia-smi's number)")
+    ap.add_argument("--gpu", type=int, help="the NVIDIA card llama-server runs on and the Monitor shows, numbered "
+                                            "as nvidia-smi numbers them (default: llama-server places the model)")
     ap.add_argument("--no-browser", action="store_true")
     if "--" in sys.argv:
         cut = sys.argv.index("--")
         a, extra = ap.parse_args(sys.argv[1:cut]), sys.argv[cut + 1:]
     else:
         a, extra = ap.parse_args(), []
-    model, exe = Path(a.model), Path(a.llama_server)
+    model, exe = Path(a.model).resolve(), Path(a.llama_server).resolve()
+    if a.mmproj:
+        a.mmproj = str(Path(a.mmproj).resolve())
     if not model.is_file():
         ap.error(f"no such model file: {model}")
     if not exe.is_file():
@@ -495,7 +534,7 @@ def main() -> int:
         ap.error("--host beyond this PC needs --api-key")
     facts = gguf_facts(model)
     name = a.name or str(facts.get("name") or model.stem)
-    vram = total_vram_gb(a.gpu)
+    vram = total_vram_gb(a.gpu or 0)
     say(f"model: {name} ({facts.get('arch') or '?'}, {facts.get('layers') or '?'} layers"
         + (f", {facts['experts']} experts, {facts.get('experts_used')} per token" if facts.get("experts") else "")
         + f"), {model.stat().st_size / 2**30:.1f} GB file" + (f"; GPU: {vram:.1f} GB VRAM" if vram else "; no NVIDIA GPU"))
@@ -503,19 +542,36 @@ def main() -> int:
         say("the model is larger than the VRAM: llama-server's --fit keeps what does not fit in RAM"
             + (" (the experts of the first layers: a MoE model runs well this way)" if facts.get("experts") else
                " (the last layers: slower, a dense model reads them from RAM each token)"))
+    try:                                                 # the port first: a busy one must not leave a loaded model
+        srv = Server((a.host, a.port), BaseHTTPRequestHandler)
+    except OSError as e:
+        say(f"port {a.port} cannot be used ({e}): is Strata already running? Another one: --port {a.port + 1}")
+        return 1
+    env = None
+    if a.gpu is not None:                                # nvidia-smi's numbering is the PCI bus order
+        env = {**os.environ, "CUDA_DEVICE_ORDER": "PCI_BUS_ID", "CUDA_VISIBLE_DEVICES": str(a.gpu)}
     up_port = free_port()
     log = ROOT / f"strata-generic-{model.stem.lower()}.log"
-    up = Upstream(llama_args(exe, model, up_port, name, a.ctx, a.mmproj, a.low_vram, extra), up_port, log)
+    exit_code = [0]
+
+    def upstream_ended():
+        exit_code[0] = 1
+        threading.Thread(target=srv.shutdown, daemon=True).start()
+    up = Upstream(llama_args(exe, model, up_port, name, a.ctx, a.mmproj, a.low_vram, extra), up_port, log, env,
+                  upstream_ended)
+
+    def on_term(*_):                                     # a SIGTERM (the launcher's Stop on Linux) stops llama-server
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, on_term)
     st = State()                                         # before the telemetry thread asks it for tok/s
     try:
         sys.path.insert(0, str(ROOT))
         from serve.telemetry import Telemetry
-        telemetry = Telemetry(extra=lambda: {"tok_s": st.tok_s}, gpu_index=a.gpu)
+        telemetry = Telemetry(extra=lambda: {"tok_s": st.tok_s}, gpu_index=a.gpu or 0)
     except Exception as e:                               # the Monitor's hardware cards stay empty
         say(f"hardware readings off: {e}")
         telemetry = None
-    srv = ThreadingHTTPServer((a.host, a.port), make_handler(up, st, name, a.api_key, telemetry, facts))
-    srv.daemon_threads = True
+    srv.RequestHandlerClass = make_handler(up, st, name, a.api_key, telemetry, facts)
     url = f"http://127.0.0.1:{a.port}"
     say(f"web app: {url}  (the model loads in the background; the page shows when it is ready)")
     say(f"API: {url}/v1 (OpenAI), {url}/v1/messages (Anthropic), {url}/v1/responses")
@@ -534,7 +590,7 @@ def main() -> int:
         pass
     finally:
         up.stop()
-    return 0
+    return exit_code[0]
 
 
 if __name__ == "__main__":

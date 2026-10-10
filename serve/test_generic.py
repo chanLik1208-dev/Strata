@@ -45,6 +45,11 @@ class Args(unittest.TestCase):
         b = generic.llama_args(Path("ls"), Path("m.gguf"), 9000, "m", None, None, True, ["-ctk", "f16"])
         self.assertEqual(b.count("-ctk"), 1)
 
+    def test_low_vram_keeps_a_v_cache_type_given(self):
+        a = generic.llama_args(Path("ls"), Path("m.gguf"), 9000, "m", None, None, True, ["-ctv", "f16"])
+        self.assertEqual(a.count("-ctv"), 1)
+        self.assertEqual(a[a.index("-ctk") + 1], "q8_0")
+
     def test_extra_args_come_last(self):
         a = generic.llama_args(Path("ls"), Path("m.gguf"), 9000, "m", None, "p.gguf", False, ["-ngl", "20"])
         self.assertEqual(a[-2:], ["-ngl", "20"])
@@ -73,6 +78,23 @@ class Accounting(unittest.TestCase):
             st.begin("/v1/chat/completions")
         self.assertEqual(st.live_view(1)["queued"], 2)
         self.assertEqual(st.live_view(4)["queued"], 0)
+
+
+    def test_speed_drops_to_zero_when_idle(self):
+        st = generic.State()
+        rid = st.begin("/v1/chat/completions")
+        st.token(rid)
+        st.tok_s = 40.0
+        st.end(rid, None, "stop")
+        self.assertEqual(st.tok_s, 0.0)
+
+
+class LauncherArgs(unittest.TestCase):
+    def test_a_quoted_path_stays_one_argument(self):
+        import strata_gui
+        self.assertEqual(strata_gui.split_args('-ngl 20 --lora "C:\My Models\a.gguf"'),
+                         ["-ngl", "20", "--lora", "C:\My Models\a.gguf"])
+        self.assertEqual(strata_gui.split_args('--x "unclosed'), ["--x", '"unclosed'])
 
 
 class Facts(unittest.TestCase):
