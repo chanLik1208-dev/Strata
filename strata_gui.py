@@ -128,7 +128,7 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Strata 啟動器")
-        self.geometry("880x760")
+        self.geometry("900x860")
         self.minsize(720, 600)
         self.proc: subprocess.Popen | None = None
         self.proc_kind = ""
@@ -149,6 +149,10 @@ class App(tk.Tk):
         self.low_vram = tk.BooleanVar()
         self.start_after = tk.BooleanVar(value=True)
         self.browser = tk.BooleanVar(value=True)
+        self.gguf = tk.StringVar()
+        self.gguf_ctx = tk.StringVar()
+        self.gguf_low = tk.BooleanVar()
+        self.gguf_extra = tk.StringVar()
         self.status = tk.StringVar(value="伺服器：檢查中…")
         self.cmdline = tk.StringVar()
 
@@ -181,8 +185,10 @@ class App(tk.Tk):
         ttk.Button(run, text="開啟聊天", command=self.open_chat).grid(row=0, column=3, padx=4)
         ttk.Label(run, textvariable=self.status).grid(row=1, column=0, columnspan=4, padx=8, pady=(0, 6), sticky="w")
 
-        form = ttk.LabelFrame(self, text="安裝模型或修改設定")
-        form.pack(fill="x", **pad)
+        self.tabs = ttk.Notebook(self)
+        self.tabs.pack(fill="x", **pad)
+        form = ttk.Frame(self.tabs, padding=(0, 6))
+        self.tabs.add(form, text="Strata 模型（Qwen3.8-Flash-Next）")
         r = 0
 
         def row(label, widget, hint=""):
@@ -235,10 +241,37 @@ class App(tk.Tk):
                                                                            padx=8, pady=(0, 8))
         form.columnconfigure(1, weight=1)
 
+        gen = ttk.Frame(self.tabs, padding=(0, 6))
+        self.tabs.add(gen, text="通用模式：任何 GGUF 模型（llama.cpp）")
+        ttk.Label(gen, text="GGUF 檔案").grid(row=0, column=0, sticky="w", padx=8, pady=3)
+        gf = ttk.Frame(gen)
+        ttk.Entry(gf, textvariable=self.gguf).pack(side="left", fill="x", expand=True)
+        ttk.Button(gf, text="...", width=3, command=self.pick_gguf).pack(side="left", padx=(4, 0))
+        gf.grid(row=0, column=1, sticky="we", padx=4, pady=3)
+        ttk.Label(gen, text="Context（tokens）").grid(row=1, column=0, sticky="w", padx=8, pady=3)
+        ttk.Combobox(gen, textvariable=self.gguf_ctx, values=["", "8192", "16384", "32768", "65536", "100000"]
+                     ).grid(row=1, column=1, sticky="w", padx=4, pady=3)
+        ttk.Label(gen, text="空白 = 依記憶體自動", foreground="gray").grid(row=1, column=2, sticky="w")
+        ttk.Label(gen, text="額外參數").grid(row=2, column=0, sticky="w", padx=8, pady=3)
+        ttk.Entry(gen, textvariable=self.gguf_extra).grid(row=2, column=1, sticky="we", padx=4, pady=3)
+        ttk.Label(gen, text="給 llama-server，例如 -ngl 20", foreground="gray").grid(row=2, column=2, sticky="w")
+        gb = ttk.Frame(gen)
+        ttk.Checkbutton(gb, text="低 VRAM（8-bit KV 快取）", variable=self.gguf_low).pack(side="left")
+        self.gguf_dl_btn = ttk.Button(gb, text="下載 llama-server", command=self.get_llama)
+        self.gguf_dl_btn.pack(side="left", padx=8)
+        self.gguf_btn = ttk.Button(gb, text="啟動 GGUF 模型", command=self.start_gguf)
+        self.gguf_btn.pack(side="left")
+        gb.grid(row=3, column=0, columnspan=3, sticky="w", padx=8, pady=6)
+        ttk.Label(gen, foreground="gray", wraplength=820, justify="left",
+                  text="模型比 VRAM 大時，llama-server 會自動把放不下的部分留在記憶體（MoE 模型留專家，"
+                       "8 GB 筆電也能跑）。網頁、Monitor、OpenAI／Anthropic／Responses API 都可以用。"
+                  ).grid(row=4, column=0, columnspan=3, sticky="w", padx=8, pady=(0, 6))
+        gen.columnconfigure(1, weight=1)
+
         act = ttk.Frame(self)
         act.pack(fill="x", padx=8)
         self.activity_text = tk.StringVar(value="閒置")
-        ttk.Label(act, textvariable=self.activity_text, width=14).pack(side="left")
+        ttk.Label(act, textvariable=self.activity_text, width=20).pack(side="left")
         self.activity = ttk.Progressbar(act, mode="indeterminate")
         self.activity.pack(side="left", fill="x", expand=True, padx=(8, 0))
         self.activity_on = False
@@ -263,6 +296,7 @@ class App(tk.Tk):
                          + ("（筆電）" if is_laptop(x) else ""))
         if g and g["vram_gb"] < LOW_VRAM_MAX_GB:
             self.low_vram.set(True)
+            self.gguf_low.set(True)
             lines.append(f"這張 {g['vram_gb']:.0f} GB 的顯卡低於 12 GB：已開啟低 VRAM 設定。"
                          "速度會比 12 GB 以上的桌機顯卡慢；放不進 GPU 的專家改由 CPU 計算。")
         if self.ram and self.ram < 32:
@@ -329,7 +363,7 @@ class App(tk.Tk):
         self.profile_label.configure(text=(self.profile_text() + ("\n" if note else "") + note).strip())
         self.cmdline.set(subprocess.list2cmdline(self.launcher(self.setup_args())))
         busy = self.proc is not None and self.proc.poll() is None
-        for b in (self.install_btn, self.check_btn, self.start_btn):
+        for b in (self.install_btn, self.check_btn, self.start_btn, self.gguf_btn, self.gguf_dl_btn):
             b.configure(state="disabled" if busy else "normal")
         self.stop_btn.configure(state="normal" if busy else "disabled")
         self.show_activity()
@@ -338,14 +372,15 @@ class App(tk.Tk):
         """The loading bar runs while setup, the check or the model's start works, and stops once the server
         answers /health as loaded: a model that is up and waiting is not "loading"."""
         busy = self.proc is not None and self.proc.poll() is None
-        on = busy and not (self.proc_kind == "server" and self.server_ready)
+        on = busy and not (self.proc_kind in ("server", "generic") and self.server_ready)
         if on and not self.activity_on:
             self.activity.start(12)
         elif not on and self.activity_on:
             self.activity.stop()
             self.activity["value"] = 0
         self.activity_on = on
-        what = {"setup": "安裝／設定中…", "check": "檢查電腦中…", "server": "啟動模型中…"}.get(self.proc_kind, "處理中…")
+        what = {"setup": "安裝／設定中…", "check": "檢查電腦中…", "server": "啟動模型中…",
+                "generic": "載入 GGUF 模型中…", "llama": "下載 llama-server 中…"}.get(self.proc_kind, "處理中…")
         self.activity_text.set(what if on else ("模型執行中" if busy else "閒置"))
 
     def profile_text(self) -> str:
@@ -428,6 +463,50 @@ class App(tk.Tk):
     def open_chat(self):
         webbrowser.open(f"http://127.0.0.1:{self.port.get().strip() or '8080'}")
 
+    def python(self) -> str:
+        """The Python that runs Strata's tools: the .venv START-HERE made, else the one running this window."""
+        venv = ROOT / ".venv" / ("Scripts/python.exe" if WIN else "bin/python")
+        exe = Path(sys.executable)
+        if WIN and exe.name.lower() == "pythonw.exe":
+            exe = exe.with_name("python.exe")
+        return str(venv if venv.exists() else exe)
+
+    def get_llama(self):
+        if not messagebox.askokcancel("Strata", "將從 GitHub 下載 llama.cpp 的 llama-server（NVIDIA 版約 550 MB，"
+                                                "含 CUDA runtime）到 engine-llama 資料夾。要繼續嗎？"):
+            return
+        self.run([self.python(), str(ROOT / "tools" / "get_llama_server.py")], "llama")
+
+    def gguf_args(self) -> list[str]:
+        args = [self.python(), str(ROOT / "serve" / "generic.py"), "--model", self.gguf.get().strip(),
+                "--port", self.port.get().strip() or "8080"]
+        if self.gguf_ctx.get().strip().isdigit():
+            args += ["--ctx", self.gguf_ctx.get().strip()]
+        if self.gguf_low.get():
+            args.append("--low-vram")
+        if self.gpu_pick.get() not in ("", "auto"):
+            args += ["--gpu", self.gpu_pick.get().split(":")[0]]
+        if not self.browser.get():
+            args.append("--no-browser")
+        extra = self.gguf_extra.get().split()
+        return args + (["--", *extra] if extra else [])
+
+    def start_gguf(self):
+        model = Path(self.gguf.get().strip())
+        if not model.is_file():
+            messagebox.showinfo("Strata", "請先選一個 .gguf 檔案。")
+            return
+        if not (ROOT / "engine-llama" / ("llama-server.exe" if WIN else "llama-server")).exists():
+            messagebox.showinfo("Strata", "還沒有 llama-server：請先按「下載 llama-server」。")
+            return
+        self.server_ready = False
+        self.run(self.gguf_args(), "generic")
+
+    def pick_gguf(self):
+        f = filedialog.askopenfilename(title="選擇 GGUF 模型", filetypes=[("GGUF", "*.gguf"), ("全部", "*.*")])
+        if f:
+            self.gguf.set(f)
+
     def pick_dir(self):
         d = filedialog.askdirectory(title="模型檔放哪裡（70–120 GB）")
         if d:
@@ -471,7 +550,7 @@ class App(tk.Tk):
                 text = (f"伺服器：執行中（port {port}）－ {h.get('model', '?')}，context {h.get('max_context', '?')}"
                         + ("" if h.get("loaded", True) else "（模型載入中…）"))
             except Exception:
-                text = "伺服器：未執行" + ("（啟動中…）" if self.proc_kind == "server" and self.proc
+                text = "伺服器：未執行" + ("（啟動中…）" if self.proc_kind in ("server", "generic") and self.proc
                                                 and self.proc.poll() is None else "")
             ready = text.startswith("伺服器：執行中") and "載入中" not in text
 
@@ -486,7 +565,7 @@ class App(tk.Tk):
 
     def on_close(self):
         if self.proc is not None and self.proc.poll() is None:
-            what = "模型" if self.proc_kind == "server" else "安裝程式"
+            what = "模型" if self.proc_kind in ("server", "generic") else "安裝程式"
             if not messagebox.askyesno("Strata", f"要停止{what}並關閉嗎？"):
                 return
             self.stop()

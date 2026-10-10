@@ -109,6 +109,9 @@ download stops, run it again: it continues where it left off. Your browser opens
 GPU and RAM, recommends a model, installs it with the choices you click, and starts, stops and opens it. The command it
 runs is shown at the bottom of the window.
 
+**Another model?** The generic mode runs any GGUF (Gemma, Llama, Mistral, your own fine-tune) with llama.cpp
+behind Strata's web app and API, and fits a model larger than the VRAM into RAM: [docs/GENERIC.md](docs/GENERIC.md).
+
 **A laptop or an 8-12 GB NVIDIA card?** Add **`--low-vram on`** (the window turns it on by itself on such a card). It
 picks a 16K context on an 8 GB card (32K on 10-12 GB), the 4-bit KV cache, images on the CPU and, under 10 GB, the
 English/code draft tokens, so more of the model fits on the GPU. Anything you set yourself wins. It is slower than a
