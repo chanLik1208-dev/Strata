@@ -127,7 +127,7 @@ def config_port(tag: str) -> int:
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Strata")
+        self.title("Strata 啟動器")
         self.geometry("880x760")
         self.minsize(720, 600)
         self.proc: subprocess.Popen | None = None
@@ -149,7 +149,7 @@ class App(tk.Tk):
         self.low_vram = tk.BooleanVar()
         self.start_after = tk.BooleanVar(value=True)
         self.browser = tk.BooleanVar(value=True)
-        self.status = tk.StringVar(value="Server: checking ...")
+        self.status = tk.StringVar(value="伺服器：檢查中…")
         self.cmdline = tk.StringVar()
 
         self.build()
@@ -165,23 +165,23 @@ class App(tk.Tk):
     # layout
     def build(self):
         pad = {"padx": 8, "pady": 4}
-        top = ttk.LabelFrame(self, text="This PC")
+        top = ttk.LabelFrame(self, text="這台電腦")
         top.pack(fill="x", **pad)
         self.pc_label = ttk.Label(top, justify="left")
         self.pc_label.pack(anchor="w", padx=8, pady=6)
 
-        run = ttk.LabelFrame(self, text="Installed models")
+        run = ttk.LabelFrame(self, text="已安裝的模型")
         run.pack(fill="x", **pad)
         self.installed_box = ttk.Combobox(run, state="readonly", width=34)
         self.installed_box.grid(row=0, column=0, padx=8, pady=6, sticky="w")
-        self.start_btn = ttk.Button(run, text="Start", command=self.start_model)
+        self.start_btn = ttk.Button(run, text="啟動", command=self.start_model)
         self.start_btn.grid(row=0, column=1, padx=4)
-        self.stop_btn = ttk.Button(run, text="Stop", command=self.stop)
+        self.stop_btn = ttk.Button(run, text="停止", command=self.stop)
         self.stop_btn.grid(row=0, column=2, padx=4)
-        ttk.Button(run, text="Open chat", command=self.open_chat).grid(row=0, column=3, padx=4)
+        ttk.Button(run, text="開啟聊天", command=self.open_chat).grid(row=0, column=3, padx=4)
         ttk.Label(run, textvariable=self.status).grid(row=1, column=0, columnspan=4, padx=8, pady=(0, 6), sticky="w")
 
-        form = ttk.LabelFrame(self, text="Install a model or change its settings")
+        form = ttk.LabelFrame(self, text="安裝模型或修改設定")
         form.pack(fill="x", **pad)
         r = 0
 
@@ -194,40 +194,40 @@ class App(tk.Tk):
             r += 1
 
         self.family_box = ttk.Combobox(form, state="readonly", values=list(FAMILIES), textvariable=self.family)
-        row("Model", self.family_box, "qwen = the original, coder = for code (fits 32 GB of RAM)")
+        row("模型", self.family_box, "qwen = 原版，coder = 寫程式用（32 GB 記憶體就放得下）")
         self.size_box = ttk.Combobox(form, state="readonly", textvariable=self.size)
-        row("Size", self.size_box)
-        row("Context (tokens)", ttk.Combobox(form, state="readonly", values=CONTEXTS, textvariable=self.context),
-            "auto = setup's recommendation for the card")
-        row("KV cache", ttk.Combobox(form, state="readonly", values=["auto", "int8", "q4_0"], textvariable=self.kv),
-            "q4_0 = half the VRAM")
-        row("Images", ttk.Combobox(form, state="readonly", values=["no", "cpu", "gpu"], textvariable=self.vision),
-            "cpu leaves the GPU's VRAM to the model")
-        row("Draft tokens", ttk.Combobox(form, state="readonly", values=["auto", *DRAFT_VOCABS],
-                                         textvariable=self.draft), "en = English/code, ~215 MiB less VRAM than cjk")
-        row("VRAM kept free (MiB)", ttk.Entry(form, textvariable=self.reserve), "empty = the engine's default")
+        row("大小", self.size_box)
+        row("Context（tokens）", ttk.Combobox(form, state="readonly", values=CONTEXTS, textvariable=self.context),
+            "auto = 依顯卡自動建議")
+        row("KV 快取", ttk.Combobox(form, state="readonly", values=["auto", "int8", "q4_0"], textvariable=self.kv),
+            "q4_0 = VRAM 減半")
+        row("圖片", ttk.Combobox(form, state="readonly", values=["no", "cpu", "gpu"], textvariable=self.vision),
+            "cpu = 把 VRAM 留給模型")
+        row("草稿詞表", ttk.Combobox(form, state="readonly", values=["auto", *DRAFT_VOCABS],
+                                         textvariable=self.draft), "en = 英文／程式碼，比 cjk 少約 215 MiB VRAM")
+        row("保留 VRAM（MiB）", ttk.Entry(form, textvariable=self.reserve), "空白 = 引擎預設")
         row("GPU", ttk.Combobox(form, state="readonly", textvariable=self.gpu_pick,
                                 values=["auto"] + [f"{g['index']}: {g['name']}" for g in self.gpus]))
-        row("Port", ttk.Entry(form, textvariable=self.port, width=8))
+        row("連接埠", ttk.Entry(form, textvariable=self.port, width=8))
         dd = ttk.Frame(form)
         ttk.Entry(dd, textvariable=self.data_dir).pack(side="left", fill="x", expand=True)
         ttk.Button(dd, text="...", width=3, command=self.pick_dir).pack(side="left", padx=(4, 0))
-        row("Model files folder", dd, "empty = Strata-data next to this folder")
+        row("模型檔資料夾", dd, "空白 = 本資料夾旁的 Strata-data")
         checks = ttk.Frame(form)
-        self.low_check = ttk.Checkbutton(checks, text="Low-VRAM profile (NVIDIA 8-12 GB, laptops)",
+        self.low_check = ttk.Checkbutton(checks, text="低 VRAM 設定（NVIDIA 8–12 GB、筆電）",
                                          variable=self.low_vram)
         self.low_check.pack(side="left")
-        ttk.Checkbutton(checks, text="Start when done", variable=self.start_after).pack(side="left", padx=12)
-        ttk.Checkbutton(checks, text="Open the browser", variable=self.browser).pack(side="left")
+        ttk.Checkbutton(checks, text="完成後啟動", variable=self.start_after).pack(side="left", padx=12)
+        ttk.Checkbutton(checks, text="開啟瀏覽器", variable=self.browser).pack(side="left")
         checks.grid(row=r, column=0, columnspan=3, sticky="w", padx=8, pady=4)
         r += 1
         self.profile_label = ttk.Label(form, foreground="#2a6", justify="left", wraplength=800)
         self.profile_label.grid(row=r, column=0, columnspan=3, sticky="w", padx=8)
         r += 1
         btns = ttk.Frame(form)
-        self.install_btn = ttk.Button(btns, text="Install / apply", command=self.install)
+        self.install_btn = ttk.Button(btns, text="安裝／套用", command=self.install)
         self.install_btn.pack(side="left")
-        self.check_btn = ttk.Button(btns, text="Check this PC", command=self.check)
+        self.check_btn = ttk.Button(btns, text="檢查這台電腦", command=self.check)
         self.check_btn.pack(side="left", padx=6)
         btns.grid(row=r, column=0, columnspan=3, sticky="w", padx=8, pady=6)
         r += 1
@@ -235,7 +235,16 @@ class App(tk.Tk):
                                                                            padx=8, pady=(0, 8))
         form.columnconfigure(1, weight=1)
 
-        logf = ttk.LabelFrame(self, text="Log")
+        act = ttk.Frame(self)
+        act.pack(fill="x", padx=8)
+        self.activity_text = tk.StringVar(value="閒置")
+        ttk.Label(act, textvariable=self.activity_text, width=14).pack(side="left")
+        self.activity = ttk.Progressbar(act, mode="indeterminate")
+        self.activity.pack(side="left", fill="x", expand=True, padx=(8, 0))
+        self.activity_on = False
+        self.server_ready = False
+
+        logf = ttk.LabelFrame(self, text="記錄")
         logf.pack(fill="both", expand=True, **pad)
         self.log = ScrolledText(logf, height=12, font=("Consolas" if WIN else "monospace", 9), state="disabled")
         self.log.pack(fill="both", expand=True, padx=4, pady=4)
@@ -246,20 +255,19 @@ class App(tk.Tk):
         self.family.set(fam)
         self.size.set(size)
         self.gpu_pick.set("auto")
-        lines = [f"RAM: {self.ram:.0f} GB"]
+        lines = [f"記憶體：{self.ram:.0f} GB"]
         if not self.gpus:
-            lines.append("NVIDIA GPU: none found (nvidia-smi). An AMD card is set up by setup.py itself.")
+            lines.append("NVIDIA 顯卡：找不到（nvidia-smi）。AMD 顯卡由 setup.py 自行設定。")
         for x in self.gpus:
-            lines.append(f"GPU {x['index']}: {x['name']}, {x['vram_gb']:.1f} GB VRAM, driver {x['driver']}"
-                         + ("  (laptop)" if is_laptop(x) else ""))
+            lines.append(f"GPU {x['index']}：{x['name']}，{x['vram_gb']:.1f} GB VRAM，驅動 {x['driver']}"
+                         + ("（筆電）" if is_laptop(x) else ""))
         if g and g["vram_gb"] < LOW_VRAM_MAX_GB:
             self.low_vram.set(True)
-            lines.append(f"This {g['vram_gb']:.0f} GB card is below 12 GB: the low-VRAM profile is on. "
-                         "Expect slower answers than on a 12+ GB desktop card; the model's experts that do not fit "
-                         "the GPU run on the CPU.")
+            lines.append(f"這張 {g['vram_gb']:.0f} GB 的顯卡低於 12 GB：已開啟低 VRAM 設定。"
+                         "速度會比 12 GB 以上的桌機顯卡慢；放不進 GPU 的專家改由 CPU 計算。")
         if self.ram and self.ram < 32:
-            lines.append("Strata needs 32 GB of RAM or more: this PC has less, the model will not fit.")
-        lines.append(f"Recommended for {self.ram:.0f} GB of RAM: {FAMILIES.get(fam, fam)} {size}")
+            lines.append("Strata 需要 32 GB 以上的記憶體：這台電腦不夠，模型放不下。")
+        lines.append(f"{self.ram:.0f} GB 記憶體建議：{FAMILIES.get(fam, fam)} {size}")
         self.pc_label.configure(text="\n".join(lines))
         tags = installed()
         self.installed_box.configure(values=tags)
@@ -315,7 +323,7 @@ class App(tk.Tk):
             self.size.set(sizes[0])
         m = MODELS.get(self.size.get(), {})
         if m.get("ram_gb") and self.ram and self.ram < m["ram_gb"] - 4:
-            note = f"needs ~{m['ram_gb']} GB of RAM, this PC has {self.ram:.0f}"
+            note = f"需要約 {m['ram_gb']} GB 記憶體，這台電腦有 {self.ram:.0f} GB"
         else:
             note = ""
         self.profile_label.configure(text=(self.profile_text() + ("\n" if note else "") + note).strip())
@@ -324,6 +332,21 @@ class App(tk.Tk):
         for b in (self.install_btn, self.check_btn, self.start_btn):
             b.configure(state="disabled" if busy else "normal")
         self.stop_btn.configure(state="normal" if busy else "disabled")
+        self.show_activity()
+
+    def show_activity(self):
+        """The loading bar runs while setup, the check or the model's start works, and stops once the server
+        answers /health as loaded: a model that is up and waiting is not "loading"."""
+        busy = self.proc is not None and self.proc.poll() is None
+        on = busy and not (self.proc_kind == "server" and self.server_ready)
+        if on and not self.activity_on:
+            self.activity.start(12)
+        elif not on and self.activity_on:
+            self.activity.stop()
+            self.activity["value"] = 0
+        self.activity_on = on
+        what = {"setup": "安裝／設定中…", "check": "檢查電腦中…", "server": "啟動模型中…"}.get(self.proc_kind, "處理中…")
+        self.activity_text.set(what if on else ("模型執行中" if busy else "閒置"))
 
     def profile_text(self) -> str:
         g = self.main_gpu()
@@ -333,22 +356,22 @@ class App(tk.Tk):
         p = S.low_vram_profile(g["vram_gb"], False, ctx, None if self.kv.get() == "auto" else self.kv.get(),
                                None, int(self.reserve.get()) if self.reserve.get().strip().isdigit() else None)
         if not p:
-            return f"Low-VRAM profile: a {g['vram_gb']:.0f} GB card does not need it (nothing changes)."
+            return f"低 VRAM 設定：{g['vram_gb']:.0f} GB 的顯卡不需要（不會改任何東西）。"
         parts = []
         if "context" in p:
             parts.append(f"context {p['context'] // 1024}K")
         if "kv" in p:
-            parts.append("4-bit KV cache")
+            parts.append("4-bit KV 快取")
         if "draft_vocab" in p and self.draft.get() == "auto":
-            parts.append("English/code draft tokens")
-        parts.append("images on the CPU if you turn them on")
-        parts.append(f"{S.DISPLAY_RESERVE_MIB} MiB kept free if this card drives the screen")
-        return "Low-VRAM profile will set: " + ", ".join(parts) + " (anything you pick above wins)."
+            parts.append("英文／程式碼草稿詞表")
+        parts.append("開圖片時改用 CPU")
+        parts.append(f"若這張卡接螢幕則保留 {S.DISPLAY_RESERVE_MIB} MiB")
+        return "低 VRAM 設定會套用：" + "、".join(parts) + "（上面你自己選的優先）。"
 
     # actions
     def run(self, cmd: list[str], kind: str):
         if self.proc is not None and self.proc.poll() is None:
-            messagebox.showinfo("Strata", "Something is already running. Stop it first.")
+            messagebox.showinfo("Strata", "已經有工作在執行，請先停止。")
             return
         self.say(f"\n> {subprocess.list2cmdline(cmd)}\n")
         env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}
@@ -356,7 +379,7 @@ class App(tk.Tk):
             self.proc = subprocess.Popen(cmd, cwd=str(ROOT), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                          stderr=subprocess.STDOUT, env=env, creationflags=NO_WINDOW)
         except OSError as e:
-            self.say(f"could not start: {e}\n")
+            self.say(f"無法啟動：{e}\n")
             return
         self.proc_kind = kind
         threading.Thread(target=self.read, args=(self.proc,), daemon=True).start()
@@ -366,15 +389,14 @@ class App(tk.Tk):
         for raw in iter(proc.stdout.readline, b""):
             self.lines.put(raw.decode("utf-8", "replace"))
         code = proc.wait()
-        self.lines.put(f"[{self.proc_kind} ended, exit code {code}]\n")
+        self.lines.put(f"[{self.proc_kind} 結束，代碼 {code}]\n")
         self.lines.put("\0refresh")
 
     def install(self):
         m = MODELS.get(self.size.get(), {})
-        size = f"about {m['download_gb']:.0f} GB" if m.get("download_gb") else "70-120 GB"
-        if not messagebox.askokcancel("Strata", f"This downloads {self.family.get()} {self.size.get()} ({size}) "
-                                                "unless it is already here, and sets it up. It can take an hour or "
-                                                "more and continues where it stopped if interrupted. Go on?"):
+        size = f"約 {m['download_gb']:.0f} GB" if m.get("download_gb") else "70–120 GB"
+        if not messagebox.askokcancel("Strata", f"將下載並設定 {self.family.get()} {self.size.get()}（{size}，已下載過的不會重抓）。"
+                                                "可能要一小時以上，中斷後重跑會接續。要繼續嗎？"):
             return
         self.run(self.launcher(self.setup_args()), "setup")
 
@@ -384,11 +406,11 @@ class App(tk.Tk):
     def start_model(self):
         tag = self.installed_box.get()
         if not tag:
-            messagebox.showinfo("Strata", "No model is installed yet. Use Install / apply below.")
+            messagebox.showinfo("Strata", "還沒有安裝模型，請用下方的「安裝／套用」。")
             return
         script = ROOT / (f"run-{tag}.bat" if WIN else f"run-{tag}.sh")
         if not script.exists():
-            self.say(f"{script.name} is missing: run Install / apply again for this model\n")
+            self.say(f"找不到 {script.name}：請對這個模型重新「安裝／套用」\n")
             return
         self.port.set(str(config_port(tag)))
         self.run(["cmd", "/c", str(script)] if WIN else ["bash", str(script)], "server")
@@ -397,7 +419,7 @@ class App(tk.Tk):
         p = self.proc
         if p is None or p.poll() is not None:
             return
-        self.say("[stopping ...]\n")
+        self.say("[停止中…]\n")
         if WIN:
             subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)], capture_output=True, creationflags=NO_WINDOW)
         else:
@@ -407,7 +429,7 @@ class App(tk.Tk):
         webbrowser.open(f"http://127.0.0.1:{self.port.get().strip() or '8080'}")
 
     def pick_dir(self):
-        d = filedialog.askdirectory(title="Where the model files go (70-120 GB)")
+        d = filedialog.askdirectory(title="模型檔放哪裡（70–120 GB）")
         if d:
             self.data_dir.set(d)
 
@@ -446,20 +468,26 @@ class App(tk.Tk):
             try:
                 with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=2) as r:
                     h = json.loads(r.read().decode("utf-8"))
-                text = (f"Server: running on port {port} - {h.get('model', '?')}, context {h.get('max_context', '?')}"
-                        + ("" if h.get("loaded", True) else " (loading the model ...)"))
+                text = (f"伺服器：執行中（port {port}）－ {h.get('model', '?')}，context {h.get('max_context', '?')}"
+                        + ("" if h.get("loaded", True) else "（模型載入中…）"))
             except Exception:
-                text = "Server: not running" + (" (starting ...)" if self.proc_kind == "server" and self.proc
+                text = "伺服器：未執行" + ("（啟動中…）" if self.proc_kind == "server" and self.proc
                                                 and self.proc.poll() is None else "")
-            self.after(0, self.status.set, text)
+            ready = text.startswith("伺服器：執行中") and "載入中" not in text
+
+            def apply():
+                self.status.set(text)
+                self.server_ready = ready
+                self.show_activity()
+            self.after(0, apply)
 
         threading.Thread(target=ask, daemon=True).start()
         self.after(3000, self.poll_health)
 
     def on_close(self):
         if self.proc is not None and self.proc.poll() is None:
-            what = "the model" if self.proc_kind == "server" else "setup"
-            if not messagebox.askyesno("Strata", f"Stop {what} and close?"):
+            what = "模型" if self.proc_kind == "server" else "安裝程式"
+            if not messagebox.askyesno("Strata", f"要停止{what}並關閉嗎？"):
                 return
             self.stop()
         self.destroy()

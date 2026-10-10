@@ -33,6 +33,8 @@
     <span class="st-pill__dot"></span><span id="pill-text">Connecting&hellip;</span></span>
   <button class="st-btn st-btn--icon" id="theme-btn" title="Light / dark" aria-label="Switch between light and dark">
     <svg class="st-icon"><use id="theme-icon" href="web/sprite.svg#i-moon"/></svg></button>
+  <div class="activity" id="activity" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-hidden="true"
+       data-state="idle" data-mode="indeterminate"><span class="activity__fill"></span></div>
 </header>
 
 <main>
@@ -237,7 +239,7 @@
     </div>
   </div>
 </aside>
-<div class="scrim" id="scrim" hidden></div>
+<div class="scrim" id="scrim" data-open="false"></div>
 <div class="st-toasts" id="toasts" aria-live="polite"></div>
 <script src="web/app.js"></script>
 </body>

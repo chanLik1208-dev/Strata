@@ -157,7 +157,7 @@ main { flex: 1; min-height: 0; display: flex; }
 
 /* ---------------------------------------------------------------- drawer */
 .st-drawer { z-index: 40; }
-.scrim { position: fixed; inset: 0; background: rgba(15, 23, 42, .18); z-index: 39; }
+.scrim { position: fixed; inset: 0; background: rgba(15, 23, 42, .18); z-index: 39; }   /* motion: below */
 .seg { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; padding: 4px; background: var(--st-surface-2);
        border: 1px solid var(--st-line); border-radius: var(--st-r-md); }
 .seg button { height: 32px; border: 0; border-radius: 10px; background: transparent; color: var(--st-ink-muted);
@@ -165,8 +165,84 @@ main { flex: 1; min-height: 0; display: flex; }
 .seg button[aria-checked="true"] { background: var(--st-surface); color: var(--st-ink); font-weight: var(--st-fw-bold);
                                    box-shadow: var(--st-sh-card); }
 .drawer-actions { display: grid; grid-template-columns: 1fr 1fr; gap: var(--st-s-3); margin-top: var(--st-s-2); }
-.st-toast { animation: toast-in 180ms var(--st-ease); }
-@keyframes toast-in { from { opacity: 0; transform: translateY(6px); } }
+
+/* ---------------------------------------------------------------- motion
+   Numbers from the Dynamization pack (SKILL.md section 3, recipes.md 6 / 10 / 11, contrast.md 4-5).  Each value
+   carries its spec beside it: dur in s, curve out / in, spring(Dv, b) baked to linear() over its t_settle.
+   Compositing only: translate, scale, opacity.  Reduced motion keeps the fades and drops the movement. */
+:root {
+  --e-out: cubic-bezier(.25, .1, .35, 1);               /* curve out */
+  --e-in:  cubic-bezier(.4, 0, 1, 1);                   /* curve in */
+  /* spring(0.3, 0.15), t_settle .32s */
+  --spring-enter: linear(0, 0.047, 0.156, 0.290, 0.427, 0.554, 0.663, 0.754, 0.826, 0.882, 0.923, 0.953, 0.974,
+                         0.988, 0.997, 1.002, 1.005, 1.006, 1.006, 1.006, 1);
+  /* spring(0.35, 0), t_settle .41s - no overshoot */
+  --spring-layout: linear(0, 0.054, 0.171, 0.306, 0.438, 0.554, 0.653, 0.733, 0.797, 0.847, 0.885, 0.915, 0.937,
+                          0.953, 0.966, 0.975, 0.982, 0.987, 0.990, 0.993, 1);
+  --t-lumin: .13s var(--e-out);                         /* brightness arrives before position */
+}
+
+/* activity bar: Strata is doing something.  Enter dur .2 out, leave dur .15 in (a leaving thing is not waited for).
+   Indeterminate: a segment sliding across, linear (a loop has no target).  Determinate: scaleX to --p, dur .2 out. */
+.activity { position: absolute; left: 0; right: 0; bottom: -1px; height: 3px; overflow: hidden; pointer-events: none;
+            opacity: 0; transition: opacity .15s var(--e-in); }
+.activity:not([data-state="idle"]) { opacity: 1; transition: opacity .2s var(--e-out); }
+.activity__fill { position: absolute; inset: 0; background: var(--st-accent); transform-origin: 0 50%;
+                  box-shadow: 0 0 8px color-mix(in srgb, var(--st-accent) 55%, transparent); }
+.activity[data-state="loading"] .activity__fill, .activity[data-state="queued"] .activity__fill { background: var(--st-warn);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--st-warn) 55%, transparent); }
+.activity[data-state="reading"] .activity__fill, .activity[data-state="waiting"] .activity__fill { background: var(--st-info);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--st-info) 55%, transparent); }
+.activity[data-mode="indeterminate"] .activity__fill { width: 38%; right: auto; left: 0;
+                                                       animation: activity-run 1.3s linear infinite; }
+.activity[data-mode="determinate"] .activity__fill { transform: scaleX(var(--p, 0)); transition: transform .2s var(--e-out); }
+@keyframes activity-run { from { translate: -100% 0; } to { translate: 263% 0; } }   /* 38% wide: -1 to 2.63 widths = off to off */
+
+/* messages enter: opacity 0 to 1 dur .25 out, y +8px to 0 spring(0.3, 0.15); stagger .04s between siblings */
+.st-msg--enter { animation: msg-move .32s var(--spring-enter) backwards, msg-fade .25s var(--e-out) backwards;
+                 animation-delay: calc(var(--i, 0) * .04s); }
+@keyframes msg-move { from { translate: 0 8px; } }
+@keyframes msg-fade { from { opacity: 0; } }
+
+/* drawer (a position: spring(0.3, 0.15) in, dur .15 curve in out) and its scrim, which lands first (.2s out) and
+   leaves last.  The dark theme dims harder: 18% black over near-black separates nothing. */
+.st-drawer { visibility: hidden; transition: translate .15s var(--e-in), visibility 0s .15s; transform: none; translate: 100% 0; }
+.st-drawer[data-open="true"] { visibility: visible; translate: 0 0; transition: translate .32s var(--spring-enter), visibility 0s; }
+.scrim { opacity: 0; visibility: hidden; transition: opacity .15s var(--e-in) .08s, visibility 0s .23s; }
+.scrim[data-open="true"] { opacity: 1; visibility: visible; transition: opacity .2s var(--e-out); }
+[data-theme="dark"] .scrim { background: rgba(0, 0, 0, .55); }
+
+/* toasts enter from the corner they live in: x +24px to 0, opacity dur .2 out; exit x +16px, dur .15 in */
+.st-toast { animation: toast-move .32s var(--spring-enter) backwards, msg-fade .2s var(--e-out) backwards;
+            transition: opacity .15s var(--e-in), translate .15s var(--e-in); }
+@keyframes toast-move { from { translate: 24px 0; } }
+.st-toast.leaving { opacity: 0; translate: 16px 0; }
+
+/* tabs and segments: brightness first (.13s), the selected pill lifts with the card shadow */
+.st-tab, .seg button { transition: color var(--t-lumin), background-color var(--t-lumin), box-shadow .15s var(--e-out),
+                                   scale .12s var(--e-out); }
+.st-tab:active, .seg button:active { scale: .97; }
+
+/* buttons: hover brightens at once; press recesses (scale .97 + shadow tightens) at feedback speed */
+.st-btn { transition: background-color var(--t-lumin), box-shadow var(--t-lumin), scale .12s var(--e-out), color var(--t-lumin); }
+.st-btn:active { transform: none; scale: .97; }
+.st-btn--primary:active { box-shadow: 0 2px 6px rgba(16, 185, 129, .2), inset 0 1px 2px rgba(0, 0, 0, .18); }
+.st-btn:disabled:active { scale: 1; }
+
+/* cards in the monitor: nothing lifts (they are not controls), but numbers settle instead of snapping */
+.st-progress__bar { transition: width .2s var(--e-out); }
+
+@media (prefers-reduced-motion: reduce) {
+  /* drop displacement and scale, keep the fades: the screen still tells you it changed */
+  .st-msg--enter { animation: msg-fade .25s var(--e-out) backwards; animation-delay: 0s; }
+  .st-drawer, .st-drawer[data-open="true"] { translate: 0 0; opacity: 0; transition: opacity .2s var(--e-out), visibility 0s .2s; }
+  .st-drawer[data-open="true"] { opacity: 1; transition: opacity .2s var(--e-out), visibility 0s; }
+  .st-toast { animation: msg-fade .2s var(--e-out) backwards; }
+  .st-toast.leaving { translate: none; }
+  .st-tab:active, .seg button:active, .st-btn:active { scale: none; }
+  .activity[data-mode="indeterminate"] .activity__fill { width: 100%; animation: activity-pulse 1.6s ease-in-out infinite; }
+  @keyframes activity-pulse { 50% { opacity: .35; } }
+}
 
 /* ---------------------------------------------------------------- narrow screens */
 @media (max-width: 1000px) {

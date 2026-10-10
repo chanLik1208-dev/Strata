@@ -31,11 +31,31 @@ function toast(kind, title, text = "", ms = 3500, action = null) {
     b.style.height = "32px";
     b.style.marginLeft = "auto";
     b.textContent = action.label;
-    b.onclick = () => { action.run(); el.remove(); };
+    b.onclick = () => { action.run(); dismissToast(el); };
     el.appendChild(b);
   }
   $("toasts").appendChild(el);
-  setTimeout(() => el.remove(), ms);
+  setTimeout(() => dismissToast(el), ms);
+}
+// exit: x +16px and a fade in 0.15s (curve in), then the toasts that stay slide into the gap - spring(0.35, 0)
+// over its t_settle 0.41s.  The node goes on a timer, never on transitionend (it does not fire when cancelled).
+const SPRING_LAYOUT = "linear(0, 0.054, 0.171, 0.306, 0.438, 0.554, 0.653, 0.733, 0.797, 0.847, 0.885, 0.915, " +
+                      "0.937, 0.953, 0.966, 0.975, 0.982, 0.987, 0.990, 0.993, 1)";
+function dismissToast(el) {
+  if (!el.isConnected || el.classList.contains("leaving")) return;
+  el.classList.add("leaving");
+  setTimeout(() => {
+    const rest = [...$("toasts").children].filter((t) => t !== el);
+    const before = rest.map((t) => t.getBoundingClientRect().top);
+    el.remove();
+    rest.forEach((t, i) => {
+      const dy = before[i] - t.getBoundingClientRect().top;
+      if (dy && t.animate && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        try { t.animate([{translate: `0 ${dy}px`}, {translate: "0 0"}], {duration: 410, easing: SPRING_LAYOUT}); }
+        catch (e) { t.animate([{translate: `0 ${dy}px`}, {translate: "0 0"}], {duration: 410, easing: "ease-out"}); }
+      }
+    });
+  }, 150);
 }
 
 async function copyText(text, btn) {
@@ -95,6 +115,24 @@ function headers(json = false) {
 }
 $("api-key").value = store.get("apikey", "");
 $("api-key").onchange = () => { store.set("apikey", $("api-key").value.trim()); toast("success", "API key saved", "Kept in this browser only."); };
+
+// ------------------------------------------------------------------ the activity bar under the header
+// Shown whenever Strata is doing something: loading the model, a request queued, reading a prompt (with its %),
+// writing an answer, or this page waiting for the first token.  Indeterminate unless a prompt's progress is known.
+const activity = {server: "idle", pct: null, loading: false, local: false};
+function renderActivity() {
+  const bar = $("activity"), a = activity;
+  const state = a.loading ? "loading" : a.server !== "idle" ? a.server : a.local ? "waiting" : "idle";
+  const labels = {loading: "Loading the model", queued: "Waiting in the queue", reading: "Reading the prompt",
+                  generating: "Writing the answer", waiting: "Sending the request"};
+  bar.dataset.state = state;
+  bar.dataset.mode = state === "reading" && a.pct != null ? "determinate" : "indeterminate";
+  bar.style.setProperty("--p", String(a.pct != null ? Math.max(0.02, a.pct / 100) : 0));
+  bar.setAttribute("aria-hidden", String(state === "idle"));
+  bar.setAttribute("aria-label", labels[state] || "");
+  if (bar.dataset.mode === "determinate") bar.setAttribute("aria-valuenow", String(Math.round(a.pct)));
+  else bar.removeAttribute("aria-valuenow");
+}
 
 let health = {model: "strata", images: false, max_context: 0};
 async function loadHealth() {
@@ -190,6 +228,11 @@ function render(m) {
     setPill("idle", "Idle");
   }
   if (live.queued > 0) setPill("queued", `${live.queued} queued`);
+  activity.server = live.queued > 0 && live.state !== "reading" && live.state !== "generating" ? "queued"
+                  : live.state === "reading" || live.state === "generating" ? live.state : "idle";
+  activity.pct = live.state === "reading" && live.prompt_total ? (100 * live.prompt_read) / live.prompt_total : null;
+  activity.loading = (m.requests || []).some((r) => r.state === "loading");   // a request waits for the engine to load
+  renderActivity();
   if (tab === "monitor") renderMonitor(live, hw, st, eng, h, last, m.requests || [], m.totals, m.requests_kept);
   if (tab === "monitor") renderConvCache(m.conversation_cache);
   if (tab === "about") renderAbout(eng, hw, st);
@@ -687,11 +730,15 @@ function updateAssistant(el, m, streaming) {
   el.querySelector(".meta-text").textContent = m.meta || (streaming ? "" : m.stopped ? "Stopped" : "");
   el.querySelector("[data-msg-copy]").hidden = streaming || !m.text;
 }
-function renderChat() {
+function renderChat(enterFrom = Infinity) {
   const chat = $("chat");
   chat.querySelectorAll(".st-msg").forEach((e) => e.remove());
   $("chat-empty").hidden = messages.length > 0;
-  messages.forEach((m, i) => chat.appendChild(msgEl(m, i)));
+  messages.forEach((m, i) => {
+    const el = msgEl(m, i);
+    if (i >= enterFrom) { el.classList.add("st-msg--enter"); el.style.setProperty("--i", String(i - enterFrom)); }
+    chat.appendChild(el);
+  });
   scrollDown(true);
 }
 function nearBottom() { const s = $("chat-scroll"); return s.scrollHeight - s.scrollTop - s.clientHeight < 120; }
@@ -763,6 +810,8 @@ function assistantMessages(m) {
 }
 
 function setBusy(on) {
+  activity.local = on;
+  renderActivity();
   $("stop-btn").hidden = !on;
   $("send-btn").disabled = on;
   $("composer-hint").textContent = on ? "" : "Shift+Enter: new line";
@@ -779,7 +828,7 @@ async function send() {
   autosize();
   const m = {role: "assistant", text: "", reasoning: "", time: Date.now()};
   messages.push(m);
-  renderChat();
+  renderChat(messages.length - 2);                    // the question and the answer's bubble enter, 0.04s apart
   const el = $("chat").lastElementChild;
   const controller = new AbortController();
   busy = {controller, msg: m};
@@ -984,7 +1033,7 @@ $("input").addEventListener("paste", (e) => {
 function openDrawer(open) {
   $("drawer").dataset.open = String(open);
   $("drawer").setAttribute("aria-hidden", String(!open));
-  $("scrim").hidden = !open;
+  $("scrim").dataset.open = String(open);
   if (open) { loadDrawer(); loadShared(); loadMcp(); }
 }
 function loadDrawer(s = settings) {
