@@ -4468,6 +4468,37 @@ def draft_vocab_note(vram_gb: float, chosen: str | None) -> list[str]:
 
 
 SMALL_CARD_GB = 7.5            # #496: a card under 8 GB gets a tip (an 8 GB card lists 7.99)
+LOW_VRAM_MAX_GB = 12.5         # --low-vram on: the cards it is for, 8-12 GB (a 12 GB card lists 11.99), laptops first
+LOW_VRAM_8GB_CTX = 16384       # --low-vram on: the context on a card under 10 GB (an 8 GB laptop RTX 4060/4070/5060)
+LOW_VRAM_12GB_CTX = 32768      # ... and on a 10-12 GB card (the context setup recommends there anyway)
+
+
+def is_laptop_gpu(g) -> bool:
+    """An NVIDIA laptop card: nvidia-smi names them "... Laptop GPU" (RTX 4060 Laptop GPU)."""
+    return "laptop" in str(g.get("name", "")).lower()
+
+
+def low_vram_profile(vram_gb: float, drives_display: bool, context=None, kv=None, vision=None, reserve=None) -> dict:
+    """--low-vram on: the settings that leave an 8-12 GB NVIDIA card (most laptops) the most VRAM for the expert
+    cache, for each one the user did not choose (an explicit flag always wins; {} on a bigger card).  A smaller
+    context and the 4-bit KV cache (half its VRAM), the image encoder on the CPU (on the GPU it shrinks the prompt
+    chunks on cards up to 12 GB, #469), the English/code draft subset on a card under 10 GB (~215 MiB less than cjk;
+    the answers in other languages stay the same, only their drafts are accepted less often) and, on a card that
+    drives the display, the display reserve of #779.  Opt-in: without the flag nothing changes."""
+    if not 0 < vram_gb < LOW_VRAM_MAX_GB:
+        return {}
+    p = {}
+    if context is None:
+        p["context"] = LOW_VRAM_8GB_CTX if vram_gb < 10 else LOW_VRAM_12GB_CTX
+    if kv is None:
+        p["kv"] = "q4_0"
+    if vision == "yes":                    # "yes" = the default place; an explicit "gpu" is kept
+        p["vision"] = "cpu"
+    if vram_gb < 10:
+        p["draft_vocab"] = "en"            # used only when neither --draft-vocab nor the saved config chose one
+    if reserve is None and drives_display:
+        p["vram_reserve_mib"] = DISPLAY_RESERVE_MIB
+    return p
 
 
 def small_card_note(ctx: int, draft_vocab: str | None) -> list[str]:
@@ -4875,6 +4906,10 @@ def main() -> int:
     ap.add_argument("--vram-reserve-mib", type=int, metavar="N",
                     help="VRAM in MiB the engine leaves free for other programs (a game, another model; the engine's "
                          "default: 700); the expert cache takes that much less")
+    ap.add_argument("--low-vram", choices=["on", "off"], default="off",
+                    help="NVIDIA cards with 8-12 GB of VRAM (most gaming laptops): a smaller context, the 4-bit KV "
+                         "cache, images on the CPU, and on an 8 GB card the English/code draft subset, for every one "
+                         "of them you do not set yourself (default: off, nothing changes)")
     ap.add_argument("--parallel", type=int, metavar="N",
                     help="up to N requests decode together (batch slots, opt-in; default: one at a time, the others "
                          "wait). Each slot takes VRAM from the expert cache; setup says what it recommends")
@@ -5253,6 +5288,29 @@ def main() -> int:
     ok(f"size: {model}")
     tag = fam["tag"] + model                           # names of the pack, config and start script
     small = min(x["vram_gb"] for x in chosen)         # each card keeps its layers' KV of the whole context
+    lowvram = {}                                       # --low-vram on: what it set (opt-in; one NVIDIA card)
+    if a.low_vram == "on" and (hip or multi):
+        warn("--low-vram is for one NVIDIA card: nothing changes")
+    elif a.low_vram == "on":
+        lowvram = low_vram_profile(gpu.get("vram_gb", 0.0), gpu_drives_display(gpu), a.context, a.kv, a.vision,
+                                   a.vram_reserve_mib)
+        if not lowvram:
+            ok(f"--low-vram: a {gpu.get('vram_gb', 0.0):.0f} GB card is not one it is for (under "
+               f"{LOW_VRAM_MAX_GB:g} GB): nothing changes")
+        else:
+            a.context = lowvram.get("context", a.context)
+            a.kv = lowvram.get("kv", a.kv)
+            a.vision = lowvram.get("vision", a.vision)
+            a.vram_reserve_mib = lowvram.get("vram_reserve_mib", a.vram_reserve_mib)
+            kind = "laptop " if is_laptop_gpu(gpu) else ""
+            ok(f"low-VRAM profile for this {gpu.get('vram_gb', 0.0):.0f} GB {kind}card: " + ", ".join(
+                {"context": f"context {lowvram.get('context', 0) // 1024}K", "kv": "4-bit KV cache",
+                 "vision": "images on the CPU", "draft_vocab": "English/code draft subset (unless one was chosen)",
+                 "vram_reserve_mib": f"{lowvram.get('vram_reserve_mib')} MiB kept free for the display"}[k]
+                for k in lowvram) + " (a flag you give yourself wins)")
+    elif not hip and not multi and 0 < gpu.get("vram_gb", 0.0) < LOW_VRAM_MAX_GB and a.context is None:
+        say(f"  tip: on a {gpu.get('vram_gb', 0.0):.0f} GB card, --low-vram on picks the settings that leave the "
+            "expert cache the most VRAM (a smaller context, the 4-bit KV cache, images on the CPU)")
     rec_ctx = 32768 if small < 14 else 65536 if small < 20 else 131072
     if budget is not None:                             # UD-Q4_K_XL: every GB of KV is a GB fewer of cached experts
         rec_ctx = 8192 if small < 14 else 32768
@@ -5324,6 +5382,8 @@ def main() -> int:
         say("  Images: the model can also read pictures (screenshots, photos, scanned pages). This adds a 0.9 GB")
         say("  download and keeps ~1.4 GB of VRAM free for the image encoder, so text is a few % slower.")
         vision = "gpu" if ask("Do you want images?", ["y", "n"], "n", a.yes) == "y" else "none"
+        if vision == "gpu" and lowvram:                # --low-vram on: the encoder on the CPU (#469)
+            vision = "cpu"
     ok("images: " + {"none": "off", "gpu": "on", "cpu": "on (encoder on the CPU)"}[vision])
     if vision != "none" and MODELS[model].get("vision_untested"):
         warn(f"images with {model} are untested: users report them working, but we have not run this file with "
@@ -5554,7 +5614,7 @@ def main() -> int:
         run([sys.executable, str(ROOT / "tools" / "mtp_rt.py"), "--gguf", str(mtp / "mtp-q2_0.gguf"), "--out", str(rt)],
             env=env)
     # a setup run again without --draft-vocab keeps the subset this model's config chose before (cyrillic, fr, en)
-    draft_vocab = a.draft_vocab or saved_draft_vocab(ROOT / f"strata-{tag.lower()}.json")
+    draft_vocab = a.draft_vocab or saved_draft_vocab(ROOT / f"strata-{tag.lower()}.json") or lowvram.get("draft_vocab")
     refresh_draft_vocab(rt, draft_vocab or "cjk")
     ok(f"MTP draft layer: {rt}")
     for line in draft_vocab_note(gpu.get("vram_gb", 0.0), draft_vocab):   # #474: a recommendation, nothing changes

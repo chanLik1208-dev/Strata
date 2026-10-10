@@ -105,6 +105,15 @@ download stops, run it again: it continues where it left off. Your browser opens
 > Strata loads 35-55 GB into your RAM and locks part of it for the graphics card. This is normal. Wait, and don't
 > close the window. The window shows what Strata is doing.
 
+**Prefer a window to the console?** Double-click **`STRATA-GUI.bat`** (Linux: `./strata-gui.sh`). It shows your
+GPU and RAM, recommends a model, installs it with the choices you click, and starts, stops and opens it. The command it
+runs is shown at the bottom of the window.
+
+**A laptop or an 8-12 GB NVIDIA card?** Add **`--low-vram on`** (the window turns it on by itself on such a card). It
+picks a 16K context on an 8 GB card (32K on 10-12 GB), the 4-bit KV cache, images on the CPU and, under 10 GB, the
+English/code draft tokens, so more of the model fits on the GPU. Anything you set yourself wins. It is slower than a
+12 GB+ desktop card, and you still need 32 GB of RAM.
+
 **Next time**, run `START-HERE.bat` (or `./setup.sh`) again. It starts right away and downloads nothing twice. Close
 its window to stop the model. `UPDATE.bat` (`./update.sh`) updates Strata without starting it. Updating, Docker,
 several cards, where the files go and every option: [docs/INSTALL.md](docs/INSTALL.md).
